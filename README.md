@@ -69,6 +69,8 @@ sudo -H pip install afreeze
 Then, add the command to `/etc/profile.d/afreeze.sh`. For example, to enable auto-mute mode, use:
 
 ```bash
+# Remove a PID file that remains from a hard shutdown.
+rm -f /tmp/afreeze.pid
 afreeze --daemon --card 0 --command "'Auto-Mute Mode' Enabled"
 ```
 
