@@ -6,6 +6,9 @@ version_re = re.compile(r'^__version_info__\s*=\s*(.*)$', re.M)
 with open('afreeze', 'r') as file:
     version_info = version_re.search(file.read()).group(1)
     version = '.'.join(ast.literal_eval(version_info))
+with open('README.md') as file:
+    long_description = file.read()
+
 
 setuptools.setup(
     name="afreeze",
@@ -16,6 +19,8 @@ setuptools.setup(
     extras_require = {
         'daemon': ['python-daemon>=2.2.0']
     },
+    long_description=long_description,
+    long_description_content_type='text/markdown',
     python_requires='>3.7.0',
     description="Freeze alsa configuration settings.",
     license="Unlicense",
