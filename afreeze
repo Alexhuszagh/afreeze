@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+'''
+    afreeze
+    -------
+
+    Freeze alsa configuration settings.
+
+    Examples:
+    =========
+
+    To fix the volume at 75%, you can use:
+        afreeze --command "'Master' 75%"
+
+    To fix the volume at 75% on the left speaker and 0% on the
+    right speaker, you can use:
+        afreeze --command "'Master' 75%,0%"
+
+    To list the valid controls for the default device, you can use:
+        afreeze --list-controls
+        afreeze
+
+    To list the valid controls for a given sound card, you can use:
+        afreeze --card 0 --list-controls
+
+    To list the current contents for the default device, you can use:
+        afreeze --list-contents
+
+    To list the current contents for a given sound card, you can use:
+        afreeze --card 0 --list-contents
+
+    To enable auto-mute mode, you can use:
+        afreeze --card 0 "'Auto-Mute Mode' Enabled"
+
+    Daemon:
+    =======
+
+    This can also be run as a daemon, requiring python-daemon. To
+    use it as a daemon, simply add the `--daemon` flag to any command.
+
+    To fix the volume at 75% on the left speaker and 0% on the
+    right speaker as a daemon, you can use:
+        afreeze --daemon --command "'Master' 75%,0%"
+
+    Controls:
+    =========
+
+    For the default device, my system supports the
+    following controls:
+        Simple mixer control 'Master',0
+        Simple mixer control 'Capture',0
+
+    For my "HDA Intel PCH" sound card, my system supports
+    the following controls:
+        Simple mixer control 'Master',0
+        Simple mixer control 'Headphone',0
+        Simple mixer control 'Headphone Mic',0
+        Simple mixer control 'Headphone Mic Boost',0
+        Simple mixer control 'Speaker',0
+        Simple mixer control 'PCM',0
+        Simple mixer control 'Mic Mute-LED Mode',0
+        Simple mixer control 'IEC958',0
+        Simple mixer control 'IEC958',1
+        Simple mixer control 'IEC958',2
+        Simple mixer control 'IEC958',3
+        Simple mixer control 'IEC958',4
+        Simple mixer control 'Capture',0
+        Simple mixer control 'Auto-Mute Mode',0
+        Simple mixer control 'Digital',0
+        Simple mixer control 'Headset Mic',0
+        Simple mixer control 'Headset Mic Boost',0
+        Simple mixer control 'Internal Mic',0
+        Simple mixer control 'Internal Mic Boost',0
+'''
+
+__version_info__ = ('0','1','0')
+__version__ = '.'.join(__version_info__)
+
+import argparse
+import asyncio
+import errno
+import os
+import signal
+import subprocess
+import sys
+
+parser = argparse.ArgumentParser(description='Freeze alsa configuration settings.')
+parser.add_argument(
+    '-c', '--card',
+    help='''select the card''',
+    default=None
+)
+parser.add_argument(
+    '-D', '--device',
+    help='''select the device, default 'default' ''',
+    type=str,
+    default='default'
+)
+parser.add_argument(
+    '-C', '--commands',
+    help='''commands to freeze''',
+    action='append',
+)
+parser.add_argument(
+    '-d', '--daemon',
+    help='''run as a daemon (requires python-daemon)''',
+    action='store_true'
+)
+parser.add_argument(
+    '-l', '--list-controls',
+    help='''show all mixer simple controls''',
+    action='store_true'
+)
+parser.add_argument(
+    '-L', '--list-contents',
+    help='''show contents of all mixer simple controls''',
+    action='store_true'
+)
+parser.add_argument(
+    '-V', '--version',
+    action='version',
+    version=f'%(prog)s {__version__}'
+)
+args = parser.parse_args()
+pidfile = '/tmp/afreeze.pid'
+signals = [
+    signal.SIGABRT,
+    signal.SIGALRM,
+    signal.SIGBUS,
+    signal.SIGFPE,
+    signal.SIGHUP,
+    signal.SIGILL,
+    signal.SIGINT,
+    #signal.SIGKILL,
+    signal.SIGQUIT,
+    signal.SIGPIPE,
+    signal.SIGSEGV,
+    signal.SIGTERM,
+    signal.SIGTRAP,
+    signal.SIGUSR1,
+    signal.SIGUSR2,
+]
+
+def error(message, code=126, show_help=True):
+    '''Print message, help, and exit on error.'''
+
+    sys.stderr.write(f'error: {message}.\n')
+    if show_help:
+        parser.print_help()
+    sys.exit(code)
+
+
+def delete_pid(code, *args):
+    '''Delete PID file on Unix signal.'''
+
+    # Ignore all exceptions, since we should only get issues
+    # if the file is a directory or permission errors.
+    try:
+        os.unlink(pidfile)
+    except Exception:
+        pass
+    sys.exit(code)
+
+
+def base_command():
+    '''Get the base arguments with the card and device.'''
+
+    command = f'amixer --device {args.device}'
+    if args.card is not None:
+        command = f'{command} --card {args.card}'
+    return command
+
+
+def list_controls():
+    '''List valid controls and exit.'''
+
+    subprocess.check_call(f'{base_command()} scontrols', shell=True, stdout=sys.stdout)
+    sys.exit(0)
+
+
+def list_contents():
+    '''Print message, help, and exit on error.'''
+
+    subprocess.check_call(f'{base_command()} scontents', shell=True, stdout=sys.stdout)
+    sys.exit(0)
+
+
+def freeze():
+    '''Re-apply frozen commands.'''
+
+    for cmd in args.commands:
+        subprocess.check_call(f'{base_command()} --quiet set {cmd}', shell=True)
+
+
+async def monitor():
+    '''Monitor for alsactl events and re-apply frozen commands.'''
+
+    freeze()
+    command = 'stdbuf -oL alsactl monitor'
+    monitor = await asyncio.create_subprocess_shell(command, stdout=subprocess.PIPE)
+    while True:
+        line = await monitor.stdout.readline()
+        freeze()
+
+
+def run(handle_signals=True):
+    '''Check if another instance is not running, then run.'''
+
+    # Try to write to the pidfile,
+    # Do not use `exists` or `isfile`, then open, since
+    # it could be written in between the time it was queried
+    # and then written.
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(pidfile, flags)
+        with os.fdopen(fd, 'w') as file:
+            file.write(str(os.getpid()))
+    except OSError as err:
+        if err.errno == errno.EEXIST:
+            error(f'afreeze is already running, exiting. if you believe this is an error, delete {pidfile}', show_help=False)
+        else:
+            # Unexpected error.
+            raise
+
+    # Add signal handlers. We want these to trigger as soon
+    # as is possible. We're handling basically every
+    # signal under the sun, just to make sure we cleanup.
+    if handle_signals:
+        for sig in signals:
+            signal.signal(sig, delete_pid)
+
+    # Run our script.
+    asyncio.run(monitor())
+
+    # We shouldn't get here, but if we somehow do, cleanup,
+    # and return a 0 error code.
+    delete_pid(0)
+
+
+def as_daemon():
+    '''Run afreeze as a daemon'''
+
+    import daemon
+    context = daemon.DaemonContext()
+    context.signal_map = {}
+    for sig in signals:
+        context.signal_map[sig] = delete_pid
+
+    with context:
+        run(handle_signals=False)
+
+
+def main():
+    '''Entry point'''
+
+    if args.list_controls and args.list_contents:
+        error('cannot list both controls and contents')
+    elif args.list_controls:
+        list_controls()
+    elif args.list_contents:
+        list_contents()
+    elif args.commands is None:
+        parser.print_help()
+    elif args.daemon:
+        as_daemon()
+    else:
+        run()
+
+
+if __name__ == '__main__':
+    main()
