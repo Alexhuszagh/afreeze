@@ -58,6 +58,20 @@ This script may also be run as a daemon, requiring `python-daemon`. To launch af
 afreeze --daemon ...
 ```
 
+# Running on Startup
+
+To run afreeze on startup for Linux distros running systemd, you can install afreeze globally:
+
+```bash
+sudo -H pip install afreeze
+```
+
+Then, add the command to `/etc/profile.d/afreeze.sh`. For example, to enable auto-mute mode, use:
+
+```bash
+afreeze --daemon --card 0 --command "'Auto-Mute Mode' Enabled"
+```
+
 # License
 
 This is free and unencumbered software released into the public domain. 
